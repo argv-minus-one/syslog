@@ -626,7 +626,7 @@ impl SyslogBuilder {
                     Err(_) => None
                 }
             },
-            pid: process::id() as i32,
+            pid: self.pid.unwrap_or_else(|| process::id() as i32),
             process: match self.process {
                 Some(process) => process,
                 None => {
