@@ -143,3 +143,35 @@ fn integration_test_with_builder() {
     assert!(s.starts_with("<14>"));
     assert!(s.ends_with("test-hostname test-app[123]: Hello, world! [key=\"value\" key2=\"value2\"]"));
 }
+
+#[test]
+fn integration_test_with_builder_and_msg_format() {
+    let server = TestServer::new();
+
+    {
+        // Set up a logger.
+        let drain = SyslogBuilder::new()
+            .hostname("test-hostname")
+            .process("test-app")
+            .pid(123)
+            .udp(server.client_addr, server.server_addr)
+            .msg_format(NullMsgFormat3164)
+            .start()
+            .expect("couldn't create syslog logger");
+
+        let logger = Logger::root_typed(drain.fuse(), o!("key" => "value"));
+
+        // Log a test message.
+        info!(logger, "Hello, world!"; "key2" => "value2");
+    }
+
+    // Get the logs received by the server thread.
+    let logs = server.finish();
+
+    // Check that the logs were correct.
+    assert_eq!(logs.len(), 1);
+
+    let s = String::from_utf8(logs[0].to_vec()).expect("log packet contains invalid UTF-8");
+    assert!(s.starts_with("<14>"));
+    assert!(s.ends_with("test-hostname test-app[123]: Hello, world!"));
+}

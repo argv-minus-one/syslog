@@ -116,7 +116,7 @@ impl<B: Write, F: MsgFormat3164> Streamer3164<B, F> {
     }
 }
 
-impl<B: Write> Drain for Streamer3164<B> {
+impl<B: Write, F: MsgFormat3164> Drain for Streamer3164<B, F> {
     type Err = syslog::Error;
     type Ok = ();
 
@@ -509,7 +509,7 @@ impl Default for SyslogKind {
     }
 }
 
-/// Builder pattern for constructing a syslog
+/// Builder pattern for constructing a syslog drain that uses RFC 3164 (BSD) style.
 /// 
 /// All settings have default values. `SyslogBuilder::new().start()` will give you a sensibly configured log drain, but you might especially want to customize the `facility`.
 /// 
@@ -519,21 +519,37 @@ impl Default for SyslogKind {
 /// * Level: all
 /// * Transport (Unix-like platforms): Unix socket `/dev/log` or `/var/run/log`
 /// * Transport (other platforms): UDP to 127.0.0.1:514
+/// * Message format: [`BasicMsgFormat3164`]
 /// * Process name: the file name portion of [`std::env::current_exe()`]
 /// * PID: [`std::process::id()`]
 /// * Hostname: [`hostname::get()`]
 /// 
+/// [`BasicMsgFormat3164`]: struct.BasicMsgFormat3164.html
 /// [`std::env::current_exe()`]: https://doc.rust-lang.org/std/env/fn.current_exe.html
 /// [`std::process::id()`]: https://doc.rust-lang.org/std/process/fn.id.html
 /// [`hostname::get()`]: https://docs.rs/hostname/0.3.0/hostname/fn.get.html
-#[derive(Clone, Debug, Default)]
-pub struct SyslogBuilder {
+#[derive(Clone, Debug)]
+pub struct SyslogBuilder<F: MsgFormat3164 = BasicMsgFormat3164> {
     facility: Option<syslog::Facility>,
     hostname: Option<String>,
     level: Option<Level>,
     logkind: SyslogKind,
+    msg_format: F,
     pid: Option<i32>,
     process: Option<String>,
+}
+impl Default for SyslogBuilder {
+    fn default() -> Self {
+        SyslogBuilder {
+            facility: None,
+            hostname: None,
+            level: None,
+            logkind: SyslogKind::default(),
+            msg_format: BasicMsgFormat3164,
+            pid: None,
+            process: None,
+        }
+    }
 }
 impl SyslogBuilder {
     /// Build a default logger
@@ -542,7 +558,8 @@ impl SyslogBuilder {
     pub fn new() -> SyslogBuilder {
         Self::default()
     }
-
+}
+impl<F: MsgFormat3164> SyslogBuilder<F> {
     /// Set syslog Facility
     /// 
     /// The default facility, as per [POSIX], is `LOG_USER`.
@@ -579,6 +596,20 @@ impl SyslogBuilder {
         self
     }
 
+    /// Set the `MsgFormat3164` to use for formatting key-value pairs in log messages.
+    pub fn msg_format<F2: MsgFormat3164>(self, msg_format: F2) -> SyslogBuilder<F2> {
+        // This changes the `F` type parameter of this `SyslogBuilder`, so we can't just change the `msg_format` field. We have to make a whole new `SyslogBuilder` with the new `msg_format`.
+        SyslogBuilder {
+            facility: self.facility,
+            hostname: self.hostname,
+            level: self.level,
+            logkind: self.logkind,
+            msg_format,
+            pid: self.pid,
+            process: self.process,
+        }
+    }
+
     /// Remote UDP syslogging
     pub fn udp(self, local: SocketAddr, host: SocketAddr) -> Self {
         let mut s = self;
@@ -607,7 +638,7 @@ impl SyslogBuilder {
     /// Start running
     /// 
     /// This method wraps the created `Streamer3164` in a `Mutex`. (For an explanation of why, see the `Streamer3164` documentation.) To get a `Streamer3164` without a `Mutex` wrapper, use the `start_single_threaded` method instead.
-    pub fn start(self) -> syslog::Result<Mutex<Streamer3164<syslog::LoggerBackend>>> {
+    pub fn start(self) -> syslog::Result<Mutex<Streamer3164<syslog::LoggerBackend, F>>> {
         self.start_single_threaded().map(|streamer| Mutex::new(streamer))
     }
 
@@ -616,7 +647,7 @@ impl SyslogBuilder {
     /// Use this if you plan to use [slog-async] or some other synchronization mechanism. Otherwise, use the `start` method instead.
     /// 
     /// [slog-async]: https://docs.rs/slog-async/2/slog_async/index.html
-    pub fn start_single_threaded(self) -> syslog::Result<Streamer3164<syslog::LoggerBackend>> {
+    pub fn start_single_threaded(self) -> syslog::Result<Streamer3164<syslog::LoggerBackend, F>> {
         let formatter = syslog::Formatter3164 {
             facility: self.facility.unwrap_or(Facility::LOG_USER),
             hostname: match self.hostname {
@@ -651,7 +682,7 @@ impl SyslogBuilder {
             } => syslog::udp(formatter, local, host)?,
             SyslogKind::Tcp { server } => syslog::tcp(formatter, server)?,
         };
-        Ok(Streamer3164::new(log))
+        Ok(Streamer3164::new(log).with_msg_format(self.msg_format))
     }
 }
 
