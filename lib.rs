@@ -37,7 +37,8 @@ use std::error::Error as StdError;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 use std::iter;
@@ -223,33 +224,6 @@ impl<B: Write> From<syslog::Logger<B, syslog::Formatter3164>> for Streamer3164<B
 /// 
 /// The BSD syslog protocol, as described by [RFC 3164], does not support structured log data. If Slog key-value pairs are to be included with log messages, they must be included as part of the message. Implementations of this trait determine if and how this will be done.
 /// 
-/// This trait can be implemented with a closure. For example:
-/// 
-/// ```
-/// # extern crate slog;
-/// # extern crate slog_syslog;
-/// #
-/// use slog::{Record, OwnedKVList};
-/// use slog_syslog::Streamer3164;
-/// use std::fmt::Formatter;
-/// #
-/// # let some_backend = syslog::Logger::new(std::io::sink(), syslog::Formatter3164 {
-/// #     facility: slog_syslog::Facility::LOG_USER,
-/// #     hostname: None,
-/// #     process: String::new(),
-/// #     pid: 0
-/// # });
-/// 
-/// let streamer = Streamer3164::new(some_backend).with_msg_format(
-///     |f: &mut Formatter, record: &Record, values: &OwnedKVList| {
-///         // Note: Use the ? operator to convert errors from
-///         // `std::fmt::Error` to `slog::Error`.
-///         write!(f, "Hello, world! Here's a log message: {}", record.msg())?;
-///         Ok(())
-///     }
-/// );
-/// ```
-/// 
 /// [RFC 3164]: https://tools.ietf.org/html/rfc3164
 pub trait MsgFormat3164 {
     /// Formats a log message and its key-value pairs into the given `Formatter`.
@@ -258,10 +232,27 @@ pub trait MsgFormat3164 {
     fn fmt(&self, f: &mut fmt::Formatter, record: &Record, values: &OwnedKVList) -> slog::Result;
 }
 
-impl<F> MsgFormat3164 for F
-where F: Fn(&mut fmt::Formatter, &Record, &OwnedKVList) -> slog::Result {
+impl<T: MsgFormat3164 + ?Sized> MsgFormat3164 for &T {
     fn fmt(&self, f: &mut fmt::Formatter, record: &Record, values: &OwnedKVList) -> slog::Result {
-        self(f, record, values)
+        (**self).fmt(f, record, values)
+    }
+}
+
+impl<T: MsgFormat3164 + ?Sized> MsgFormat3164 for Box<T> {
+    fn fmt(&self, f: &mut fmt::Formatter, record: &Record, values: &OwnedKVList) -> slog::Result {
+        (**self).fmt(f, record, values)
+    }
+}
+
+impl<T: MsgFormat3164 + ?Sized> MsgFormat3164 for Rc<T> {
+    fn fmt(&self, f: &mut fmt::Formatter, record: &Record, values: &OwnedKVList) -> slog::Result {
+        (**self).fmt(f, record, values)
+    }
+}
+
+impl<T: MsgFormat3164 + ?Sized> MsgFormat3164 for Arc<T> {
+    fn fmt(&self, f: &mut fmt::Formatter, record: &Record, values: &OwnedKVList) -> slog::Result {
+        (**self).fmt(f, record, values)
     }
 }
 
